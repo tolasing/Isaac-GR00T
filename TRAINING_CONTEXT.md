@@ -96,11 +96,13 @@ This is configured via `--embodiment franka` in the inference script.
 
 **Terminal 1 — Start policy server:**
 ```bash
-python scripts/inference_service.py \
+# From inside the gr00t Docker container or with venv activated
+python gr00t/eval/run_gr00t_server.py \
   --model-path /workspace/checkpoints/groot_pick_place/checkpoint-2000 \
-  --embodiment franka \
-  --port 8000
+  --embodiment-tag new_embodiment \
+  --modality-config-path /workspace/modality_human_hand.py
 ```
+Default port is 5555. The server script is in this repo at `gr00t/eval/run_gr00t_server.py`.
 
 **Terminal 2 — Run Isaac Sim eval:**
 ```bash
