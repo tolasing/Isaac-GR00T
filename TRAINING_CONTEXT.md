@@ -148,6 +148,46 @@ docker run --rm --gpus all \
 
 ---
 
+## Re-Training (v3) — DATASET READY, PENDING TRAINING
+
+### What Changed from v2
+- **New dataset**: 72 episodes (vs 28) — simple one-direction pick-and-place only (no return loop)
+- **Scene**: white table, 30×20×20cm cardboard box (rotated 90°, 20cm facing robot), 8cm cube in front of box
+- **Camera**: Logitech C920 on head (~91cm above table), overhead ~45° angle
+- Same modality config as v2: state=gripper only, action=single_arm+gripper ABSOLUTE
+
+### Dataset Prep Done on L4
+- `meta/modality.json` created (same v2 mapping)
+- `meta/info.json` fixed: `{chunk_index:03d}` → `{episode_chunk:03d}`
+- Dataset at: `/root/Isaac-GR00T/lerobot_dataset/` (72 episodes, 25fps)
+
+### v3 Training Command (run on L40 48GB)
+```bash
+docker run --rm --gpus all \
+  --ipc=host --ulimit memlock=-1 --ulimit stack=67108864 \
+  -v /root/Isaac-GR00T/lerobot_dataset:/data/lerobot_dataset \
+  -v /root/Isaac-GR00T/checkpoints:/data/checkpoints \
+  -v /root/Isaac-GR00T/modality_human_hand.py:/data/modality_human_hand.py \
+  -v /root/.cache/huggingface:/root/.cache/huggingface \
+  -e USE_WANDB=0 \
+  -e HF_TOKEN=<your_hf_token> \
+  gr00t \
+  bash examples/finetune.sh \
+    --base-model-path nvidia/GR00T-N1.7-3B \
+    --dataset-path /data/lerobot_dataset \
+    --embodiment-tag new_embodiment \
+    --modality-config-path /data/modality_human_hand.py \
+    --output-dir /data/checkpoints/groot_pick_place_v3
+```
+
+Upload checkpoint after training:
+```bash
+HF_XET_HIGH_PERFORMANCE=1 hf upload tolasing/groot-pick-place-v3 \
+  /root/Isaac-GR00T/checkpoints/groot_pick_place_v3/checkpoint-2000 .
+```
+
+---
+
 ## Isaac Sim Eval Setup (L4 Machine) — Already Working
 
 ### Infrastructure
