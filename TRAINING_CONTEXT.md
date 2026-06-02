@@ -148,7 +148,7 @@ docker run --rm --gpus all \
 
 ---
 
-## Re-Training (v3) — DATASET READY, PENDING TRAINING
+## Re-Training (v3) — COMPLETE ✓
 
 ### What Changed from v2
 - **New dataset**: 72 episodes (vs 28) — simple one-direction pick-and-place only (no return loop)
@@ -156,20 +156,55 @@ docker run --rm --gpus all \
 - **Camera**: Logitech C920 on head (~91cm above table), overhead ~45° angle
 - Same modality config as v2: state=gripper only, action=single_arm+gripper ABSOLUTE
 
-### Dataset Prep Done on L4
+### Dataset Prep
 - `meta/modality.json` created (same v2 mapping)
 - `meta/info.json` fixed: `{chunk_index:03d}` → `{episode_chunk:03d}`
-- Dataset at: `/root/Isaac-GR00T/lerobot_dataset/` (72 episodes, 25fps)
+- Dataset at: `/root/Isaac-GR00T/lerobot_dataset/` (72 episodes, 7673 frames, 25fps)
 
-### v3 Training Command (run on L40 48GB)
+### Infrastructure Notes (trained on 2× NVIDIA L4 24GB)
+- ZeRO stage 2 OOMs on L4 (22GB/GPU too tight for Adam optimizer states)
+- **Fix**: switched to ZeRO stage 3 + gradient checkpointing in `gr00t/configs/training/training_config.py`
+- Build Docker image: `bash docker/build.sh` then mount updated training_config.py into container
+
+### v3 Training Results
+- Machine: 2× NVIDIA L4 24GB
+- Trained in two runs: steps 0→3000, then resumed 3000→6000
+- Speed: ~2.2 s/it on 2× L4
+- Loss never plateaued (unlike v2) — still improving at step 6000:
+
+| Step range | Avg Loss |
+|------------|----------|
+| 501–1000   | 0.4122   |
+| 1001–1500  | 0.3939   |
+| 1501–2000  | 0.3843   |
+| 2001–2500  | 0.3723   |
+| 2501–3000  | 0.3704   |
+| 3001–3500  | 0.3815   | ← LR restart bump on resume
+| 3501–4000  | 0.3810   |
+| 4001–4500  | 0.3644   |
+| 4501–5000  | 0.3622   |
+| 5001–5500  | 0.3605   |
+| 5501–6000  | 0.3541   |
+
+- **Best checkpoint: `checkpoint-6000`** → uploaded to `https://huggingface.co/tolasing/groot-pick-place-v3`
+
+### v3 Training Command (2× L4, ZeRO stage 3)
 ```bash
+# First set deepspeed_stage=3 and gradient_checkpointing=True in
+# gr00t/configs/training/training_config.py, then:
+
 docker run --rm --gpus all \
   --ipc=host --ulimit memlock=-1 --ulimit stack=67108864 \
   -v /root/Isaac-GR00T/lerobot_dataset:/data/lerobot_dataset \
   -v /root/Isaac-GR00T/checkpoints:/data/checkpoints \
   -v /root/Isaac-GR00T/modality_human_hand.py:/data/modality_human_hand.py \
+  -v /root/Isaac-GR00T/gr00t/configs/training/training_config.py:/workspace/gr00t/configs/training/training_config.py \
   -v /root/.cache/huggingface:/root/.cache/huggingface \
   -e USE_WANDB=0 \
+  -e NUM_GPUS=2 \
+  -e MAX_STEPS=6000 \
+  -e SAVE_STEPS=500 \
+  -e PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
   -e HF_TOKEN=<your_hf_token> \
   gr00t \
   bash examples/finetune.sh \
@@ -180,10 +215,24 @@ docker run --rm --gpus all \
     --output-dir /data/checkpoints/groot_pick_place_v3
 ```
 
-Upload checkpoint after training:
+**To resume from a checkpoint** (same output dir + higher MAX_STEPS — trainer auto-detects latest checkpoint):
 ```bash
-HF_XET_HIGH_PERFORMANCE=1 hf upload tolasing/groot-pick-place-v3 \
-  /root/Isaac-GR00T/checkpoints/groot_pick_place_v3/checkpoint-2000 .
+# Change -e MAX_STEPS=9000 (or desired total), keep --output-dir the same
+```
+
+**Upload checkpoint:**
+```bash
+# Run inside gr00t container or any env with huggingface_hub:
+python3 -c "
+from huggingface_hub import HfApi
+api = HfApi(token='<your_hf_token>')
+api.create_repo('tolasing/groot-pick-place-v3', exist_ok=True)
+api.upload_folder(
+    folder_path='/checkpoints/groot_pick_place_v3/checkpoint-6000',
+    repo_id='tolasing/groot-pick-place-v3',
+    token='<your_hf_token>'
+)
+"
 ```
 
 ---

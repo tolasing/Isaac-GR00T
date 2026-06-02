@@ -77,8 +77,8 @@ class TrainingConfig:
     save_best_eval_metric_greater_is_better: bool = True
 
     # DeepSpeed (default)
-    deepspeed_stage: int = 2  # ZeRO stage (1, 2, or 3)
-    gradient_checkpointing: bool = False
+    deepspeed_stage: int = 3  # ZeRO stage 3 shards params+grads+optimizer across GPUs for L4 22GB
+    gradient_checkpointing: bool = True
 
     # Transformers loading parameters
     transformers_trust_remote_code: bool = True
