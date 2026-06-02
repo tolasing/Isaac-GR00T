@@ -1,5 +1,5 @@
 # GR00T Training Context — L40 Machine Summary
-> Share this with Claude on the L40 machine before starting re-training (v2).
+> v2 training COMPLETE. Checkpoint uploaded to HuggingFace. Next step: run eval on L4 machine.
 
 ---
 
@@ -79,31 +79,57 @@ The gripper signal (open/close) is meaningful and mappable between human hand an
 
 ---
 
-## Re-Training (v2) — What To Do on the L40
+## Re-Training (v2) — COMPLETE ✓
 
 ### What Changed
-Only one change to `modality_human_hand.py`:
+Two changes to `modality_human_hand.py`:
 
 ```python
 # v1 (broken)
 "state": ModalityConfig(delta_indices=[0], modality_keys=["single_arm", "gripper"]),
+# action reps: RELATIVE, RELATIVE
 
 # v2 (fixed)
 "state": ModalityConfig(delta_indices=[0], modality_keys=["gripper"]),
+# action reps: ABSOLUTE, ABSOLUTE  ← changed from RELATIVE to avoid state_key assertion error
 ```
 
-The dataset, videos, and action space are **unchanged**. Same 28 episodes.
+**Why ABSOLUTE for actions:** `generate_rel_stats` requires a matching state key for each RELATIVE action key. Since `single_arm` was removed from state, the RELATIVE action stats computation crashed. Switching to ABSOLUTE normalises using the action's own mean/std — correct since the dataset already stores pre-computed deltas.
 
-### Step 1 — Copy the updated modality config to the L40
-The updated `modality_human_hand.py` is in the repo at branch `groot_training`. Pull latest or copy the file manually. Confirm it has `modality_keys=["gripper"]` in the state block.
+Also required: `meta/modality.json` must exist in the dataset (was missing, needed manual creation):
+```json
+{
+    "state":  { "gripper":     { "start": 3, "end": 4 } },
+    "action": { "single_arm":  { "start": 0, "end": 3 },
+                "gripper":     { "start": 3, "end": 4 } },
+    "video":  { "top":         { "original_key": "observation.images.top" } },
+    "annotation": { "human.task_description": { "original_key": "task_index" } }
+}
+```
 
-### Step 2 — Run re-training
+Also required: fix `meta/info.json` path patterns (`chunk_index` → `episode_chunk`):
+```bash
+sed -i 's/{chunk_index:03d}/{episode_chunk:03d}/g' lerobot_dataset/meta/info.json
+```
+
+### v2 Training Results
+- Machine: `root@164.52.192.207` (E2E Networks cloud GPU)
+- Dataset path: `/root/Isaac-GR00T/lerobot_dataset/`
+- Checkpoint path: `/root/Isaac-GR00T/checkpoints/groot_pick_place_v2/`
+- Speed: ~2 it/s on L40
+- Loss curve (smoothed avg per 100 steps):
+  - step 100: 1.105 → step 500: 0.456 → step 1000: 0.427 → step 2000: 0.417 → step 3000: 0.404
+- Loss plateaued from ~step 500 onwards (expected for 28-episode dataset)
+- **Best checkpoint: `checkpoint-2000`** → uploaded to `https://huggingface.co/tolasing/groot-pick-place-v2`
+
+### v2 Docker Training Command (for reference)
 ```bash
 docker run --rm --gpus all \
   --ipc=host --ulimit memlock=-1 --ulimit stack=67108864 \
-  -v /home/satish/Isaac-GR00T/lerobot_dataset:/data/lerobot_dataset \
-  -v /home/satish/Isaac-GR00T/checkpoints:/data/checkpoints \
-  -v /home/satish/Isaac-GR00T/modality_human_hand.py:/data/modality_human_hand.py \
+  -v /root/Isaac-GR00T/lerobot_dataset:/data/lerobot_dataset \
+  -v /root/Isaac-GR00T/checkpoints:/data/checkpoints \
+  -v /root/Isaac-GR00T/modality_human_hand.py:/data/modality_human_hand.py \
+  -v /root/.cache/huggingface:/root/.cache/huggingface \
   -e USE_WANDB=0 \
   -e HF_TOKEN=<your_hf_token> \
   gr00t \
@@ -115,12 +141,10 @@ docker run --rm --gpus all \
     --output-dir /data/checkpoints/groot_pick_place_v2
 ```
 
-### Step 3 — Upload best checkpoint
-Upload `checkpoint-2000` (or whichever has lowest loss) to HuggingFace:
-```bash
-huggingface-cli upload tolasing/groot-pick-place-v2 \
-  /home/satish/Isaac-GR00T/checkpoints/groot_pick_place_v2/checkpoint-2000 .
-```
+**Notes:**
+- Mount `/root/.cache/huggingface` to avoid re-downloading the 7GB base model
+- Use `hf upload` (not `huggingface-cli`, deprecated) with `HF_XET_HIGH_PERFORMANCE=1`
+- Pre-download base model outside Docker with `hf_transfer` if HF is slow: `pip3 install hf-transfer && HF_HUB_ENABLE_HF_TRANSFER=1 python3 -c "from huggingface_hub import snapshot_download; snapshot_download('nvidia/GR00T-N1.7-3B', token='...')"`
 
 ---
 

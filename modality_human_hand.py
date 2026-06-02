@@ -22,12 +22,12 @@ human_hand_config = {
         modality_keys=["single_arm", "gripper"],
         action_configs=[
             ActionConfig(
-                rep=ActionRepresentation.RELATIVE,
+                rep=ActionRepresentation.ABSOLUTE,
                 type=ActionType.NON_EEF,
                 format=ActionFormat.DEFAULT,
             ),
             ActionConfig(
-                rep=ActionRepresentation.RELATIVE,
+                rep=ActionRepresentation.ABSOLUTE,
                 type=ActionType.NON_EEF,
                 format=ActionFormat.DEFAULT,
             ),
