@@ -15,19 +15,19 @@ human_hand_config = {
     ),
     "state": ModalityConfig(
         delta_indices=[0],
-        modality_keys=["gripper"],  # single_arm removed — MediaPipe coords don't map to robot EEF
+        modality_keys=["single_arm", "gripper"],
     ),
     "action": ModalityConfig(
         delta_indices=list(range(0, 16)),
         modality_keys=["single_arm", "gripper"],
         action_configs=[
             ActionConfig(
-                rep=ActionRepresentation.ABSOLUTE,
+                rep=ActionRepresentation.RELATIVE,
                 type=ActionType.NON_EEF,
                 format=ActionFormat.DEFAULT,
             ),
             ActionConfig(
-                rep=ActionRepresentation.ABSOLUTE,
+                rep=ActionRepresentation.RELATIVE,
                 type=ActionType.NON_EEF,
                 format=ActionFormat.DEFAULT,
             ),

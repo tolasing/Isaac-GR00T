@@ -1,5 +1,5 @@
 # GR00T Training Context — L40 Machine Summary
-> v2 training COMPLETE. Checkpoint uploaded to HuggingFace. Next step: run eval on L4 machine.
+> v4 training COMPLETE. checkpoint-5000 uploaded to HuggingFace as `tolasing/groot-pick-place-v4`. Next step: eval v4 (arm movement), fix gripper recording, retrain v5.
 
 ---
 
@@ -11,6 +11,56 @@
 - Installed Docker (v29.5.2) and added satish to docker group
 - Built the GR00T Docker image: `docker build -f docker/Dockerfile.groot -t gr00t .`
 - Repo: `https://github.com/tolasing/Isaac-GR00T` (branch: `groot_training`)
+
+---
+
+## Docker & Model Setup (current machine — root@e2e-60-207)
+
+### Build Docker image
+```bash
+cd /root/Isaac-GR00T
+bash docker/build.sh
+# Builds gr00t:latest from nvidia/cuda:12.8.0-devel-ubuntu22.04
+# Takes ~10–20 min on first build
+```
+
+### Download base model (nvidia/GR00T-N1.7-3B)
+**Important:** The host machine has no pip/uv. Use the gr00t container — it has `huggingface_hub` pre-installed. Do NOT set `HF_HUB_ENABLE_HF_TRANSFER=1` — `hf_transfer` is not installed in the container venv and will error.
+
+```bash
+docker run --rm \
+  -v /root/.cache/huggingface:/root/.cache/huggingface \
+  gr00t \
+  python -c "
+from huggingface_hub import snapshot_download
+snapshot_download('nvidia/GR00T-N1.7-3B', token='<your_hf_token>')
+"
+```
+
+Model downloads to `/root/.cache/huggingface/hub/` (~7GB). Mount this cache in all future training runs with `-v /root/.cache/huggingface:/root/.cache/huggingface` to avoid re-downloading.
+
+**Prerequisites (gated models — accept license on HuggingFace first):**
+- `nvidia/GR00T-N1.7-3B` — huggingface.co/nvidia/GR00T-N1.7-3B
+- `nvidia/Cosmos-Reason2-2B` — huggingface.co/nvidia/Cosmos-Reason2-2B
+
+### Upload checkpoint to HuggingFace
+```bash
+docker run --rm \
+  -v /root/Isaac-GR00T/checkpoints:/checkpoints \
+  gr00t \
+  python -c "
+from huggingface_hub import HfApi
+api = HfApi(token='<your_hf_token>')
+api.create_repo('tolasing/groot-pick-place-vN', exist_ok=True)
+api.upload_folder(
+    folder_path='/checkpoints/groot_pick_place_vN/checkpoint-XXXX',
+    repo_id='tolasing/groot-pick-place-vN',
+    token='<your_hf_token>'
+)
+"
+```
+
+---
 
 ### 2. Dataset
 - Received 28 human hand pick-and-place demo episodes via `scp` from local machine
@@ -283,19 +333,87 @@ obs = {
 
 ---
 
+---
+
+## Re-Training (v4) — COMPLETE ✓
+
+### What Changed from v3
+- **New dataset**: 81 episodes with camera-calibrated coordinates (wrist in Isaac Sim world frame)
+- **Modality config**: `single_arm` restored to state + actions back to `RELATIVE` (now valid since state has matching key)
+- **Machine**: 1× NVIDIA L40S 46GB — no ZeRO stage 3 needed (single GPU, 46GB headroom)
+- **Dataset fix**: `meta/info.json` path pattern fixed `{chunk_index:03d}` → `{episode_chunk:03d}`
+
+### Known issue: gripper stuck open
+All 81 episodes have gripper = 0.04 (fully open) throughout — close threshold in `record_demos.py` never triggered. Model will move arm correctly but not grasp. Fix in v5.
+
+### v4 Training Results
+- Machine: `root@e2e-60-207` (1× L40S 46GB)
+- Dataset: 81 episodes, 14545 frames, 25fps
+- Speed: ~1 it/s on L40S
+- Loss curve (avg per 500-step window):
+
+| Step range | Avg Loss |
+|------------|----------|
+| 10–500     | 0.2772   |
+| 501–1000   | 0.0550   |
+| 1001–1500  | 0.0440   |
+| 1501–2000  | 0.0405   |
+| 2001–2500  | 0.0356   |
+| 2501–3000  | 0.0331   |
+| 3001–3500  | 0.0315   |
+| 3501–4000  | 0.0303   |
+| 4001–4500  | 0.0274   |
+| 4501–5000  | 0.0266   |
+| 5001–5500  | 0.0258   |
+| 5501–6000  | 0.0249   |
+
+- Plateaued from ~step 2000 onwards
+- **Best checkpoint: `checkpoint-5000`** → uploaded to `https://huggingface.co/tolasing/groot-pick-place-v4`
+
+### v4 Training Command (1× L40S)
+```bash
+docker run --rm --gpus all \
+  --ipc=host --ulimit memlock=-1 --ulimit stack=67108864 \
+  -v /root/Isaac-GR00T/lerobot_dataset:/data/lerobot_dataset \
+  -v /root/Isaac-GR00T/checkpoints:/data/checkpoints \
+  -v /root/Isaac-GR00T/modality_human_hand.py:/data/modality_human_hand.py \
+  -v /root/.cache/huggingface:/root/.cache/huggingface \
+  -e USE_WANDB=0 \
+  -e MAX_STEPS=6000 \
+  -e SAVE_STEPS=500 \
+  -e HF_TOKEN=<your_hf_token> \
+  gr00t \
+  bash examples/finetune.sh \
+    --base-model-path nvidia/GR00T-N1.7-3B \
+    --dataset-path /data/lerobot_dataset \
+    --embodiment-tag new_embodiment \
+    --modality-config-path /data/modality_human_hand.py \
+    --output-dir /data/checkpoints/groot_pick_place_v4
+```
+
+**Notes:**
+- Single L40S (46GB): ZeRO stage 2 works fine, no extra DeepSpeed flags needed
+- Each checkpoint is ~24GB — monitor disk space, manually remove old ones if needed
+- `save_total_limit 5` is set but may not clean up reliably mid-run
+
+---
+
 ## Key Files
 
 | File | Purpose |
 |------|---------|
-| `modality_human_hand.py` | GR00T modality config (v2: state=gripper only) |
+| `modality_human_hand.py` | GR00T modality config (v4: state=single_arm+gripper, RELATIVE actions) |
 | `lerobot_dataset/meta/modality.json` | Dataset-side modality config |
-| `lerobot_dataset/meta/info.json` | Dataset metadata |
+| `lerobot_dataset/meta/info.json` | Dataset metadata (path uses `episode_chunk`, not `chunk_index`) |
 | `examples/finetune.sh` | Finetuning launcher |
-| `/root/groot/scripts/eval_groot_franka.py` | Isaac Sim eval script (L4) |
+| `/root/groot/scripts/eval_groot_franka.py` | Isaac Sim eval script |
 
 ---
 
 ## References
 - GR00T GitHub: https://github.com/NVIDIA/Isaac-GR00T
-- v1 Checkpoint: https://huggingface.co/tolasing/groot-pick-place
 - Fork: https://github.com/tolasing/Isaac-GR00T (branch: `groot_training`)
+- v1 Checkpoint: https://huggingface.co/tolasing/groot-pick-place
+- v2 Checkpoint: https://huggingface.co/tolasing/groot-pick-place-v2
+- v3 Checkpoint: https://huggingface.co/tolasing/groot-pick-place-v3
+- v4 Checkpoint: https://huggingface.co/tolasing/groot-pick-place-v4
